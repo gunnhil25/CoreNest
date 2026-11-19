@@ -2,11 +2,7 @@ name: Build, Test & Publish Docker Image
 
 on:
   push:
-    branches:
-      - main
   pull_request:
-    branches:
-      - main
   workflow_dispatch:
 
 env:
@@ -63,6 +59,59 @@ jobs:
           done
           curl -fsS http://localhost:8000/ | grep -q "CoreNest"
           echo "Frontend check passed!"
+
+          # End-to-end Auth, Setup, and RBAC smoke test
+          curl -fsS http://localhost:8000/api/auth/status | grep -q '"initialized":false'
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8000/api/data)" = "401"
+
+          SETUP_CODE=$(curl -s -o /dev/null -w '%{http_code}' -c /tmp/admin.cookie \
+            -H 'Content-Type: application/json' \
+            -d '{"username":"admin","display_name":"Admin User","password":"adminpass123"}' \
+            http://localhost:8000/api/auth/setup)
+          test "$SETUP_CODE" = "201"
+
+          SECOND_SETUP=$(curl -s -o /dev/null -w '%{http_code}' \
+            -H 'Content-Type: application/json' \
+            -d '{"username":"admin2","display_name":"Admin 2","password":"adminpass123"}' \
+            http://localhost:8000/api/auth/setup)
+          test "$SECOND_SETUP" = "403"
+
+          ADMIN_EXP_ID=$(curl -fsS -b /tmp/admin.cookie \
+            -H 'Content-Type: application/json' \
+            -d '{"desc":"Admin Rent","amount":1200,"payer":"Admin User","category":"Rent","date":"2026-11-19T12:00:00Z"}' \
+            http://localhost:8000/api/expenses | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+
+          USER_CREATE_CODE=$(curl -s -o /dev/null -w '%{http_code}' -b /tmp/admin.cookie \
+            -H 'Content-Type: application/json' \
+            -d '{"username":"alex","display_name":"Alex","password":"userpass123","role":"user","add_as_member":true}' \
+            http://localhost:8000/api/users)
+          test "$USER_CREATE_CODE" = "201"
+
+          curl -fsS -c /tmp/user.cookie \
+            -H 'Content-Type: application/json' \
+            -d '{"username":"alex","password":"userpass123"}' \
+            http://localhost:8000/api/auth/login > /dev/null
+
+          test "$(curl -s -o /dev/null -w '%{http_code}' -b /tmp/user.cookie http://localhost:8000/api/data)" = "200"
+
+          USER_EXP_ID=$(curl -fsS -b /tmp/user.cookie \
+            -H 'Content-Type: application/json' \
+            -d '{"desc":"Groceries","amount":55,"payer":"Alex","category":"Groceries","date":"2026-11-19T12:00:00Z"}' \
+            http://localhost:8000/api/expenses | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+
+          # Standard user can edit own expense
+          test "$(curl -s -o /dev/null -w '%{http_code}' -b /tmp/user.cookie -X PUT -H 'Content-Type: application/json' -d '{"desc":"Groceries Updated","amount":60,"payer":"Alex","category":"Groceries","date":"2026-11-19T12:00:00Z"}' http://localhost:8000/api/expenses/$USER_EXP_ID)" = "200"
+
+          # Standard user cannot edit/delete admin expense or call admin routes
+          test "$(curl -s -o /dev/null -w '%{http_code}' -b /tmp/user.cookie -X PUT -H 'Content-Type: application/json' -d '{"desc":"Hack","amount":1,"payer":"Alex","category":"Rent","date":"2026-11-19T12:00:00Z"}' http://localhost:8000/api/expenses/$ADMIN_EXP_ID)" = "403"
+          test "$(curl -s -o /dev/null -w '%{http_code}' -b /tmp/user.cookie -X DELETE http://localhost:8000/api/expenses/$ADMIN_EXP_ID)" = "403"
+          test "$(curl -s -o /dev/null -w '%{http_code}' -b /tmp/user.cookie -H 'Content-Type: application/json' -d '{"name":"NewCat","icon":"tag","color":"#6d5dfc"}' http://localhost:8000/api/categories)" = "403"
+          test "$(curl -s -o /dev/null -w '%{http_code}' -b /tmp/user.cookie http://localhost:8000/api/users)" = "403"
+          test "$(curl -s -o /dev/null -w '%{http_code}' -b /tmp/user.cookie -H 'Content-Type: application/json' -d '{"members":[],"categories":[],"expenses":[]}' http://localhost:8000/api/data)" = "403"
+
+          # Standard user can delete own expense
+          test "$(curl -s -o /dev/null -w '%{http_code}' -b /tmp/user.cookie -X DELETE http://localhost:8000/api/expenses/$USER_EXP_ID)" = "200"
+          echo "Auth and RBAC checks passed!"
 
       - name: Tear down test stack
         if: always()

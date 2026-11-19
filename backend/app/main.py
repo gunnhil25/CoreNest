@@ -1,17 +1,18 @@
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-import os
 from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import select, text
+from sqlalchemy import inspect, select, text
 
 from backend.app.config import settings
 from backend.app.database import engine, Base, AsyncSessionLocal
-from backend.app.models import CategoryModel
+from backend.app.models import CategoryModel, SessionModel, UserModel  # noqa: F401
+from backend.app.api.auth import router as auth_router
+from backend.app.api.users import router as users_router
 from backend.app.api.sync import router as sync_router
 from backend.app.api.members import router as members_router
 from backend.app.api.categories import router as categories_router
@@ -29,11 +30,40 @@ DEFAULT_CATEGORIES = [
 ]
 
 
+def ensure_schema_migrations(sync_conn) -> None:
+    """Add new ownership columns on existing expenses tables without dropping data."""
+    inspector = inspect(sync_conn)
+    if not inspector.has_table("expenses"):
+        return
+
+    existing_cols = {col["name"] for col in inspector.get_columns("expenses")}
+    dialect_name = sync_conn.dialect.name
+
+    if "created_by_user_id" not in existing_cols:
+        if dialect_name == "postgresql":
+            sync_conn.execute(
+                text(
+                    "ALTER TABLE expenses ADD COLUMN created_by_user_id INTEGER "
+                    "REFERENCES users(id) ON DELETE SET NULL"
+                )
+            )
+        else:
+            sync_conn.execute(
+                text("ALTER TABLE expenses ADD COLUMN created_by_user_id INTEGER")
+            )
+
+    if "created_by_name" not in existing_cols:
+        sync_conn.execute(
+            text("ALTER TABLE expenses ADD COLUMN created_by_name VARCHAR(100)")
+        )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # 1. Initialize DB tables
+    # 1. Initialize DB tables and apply additive migrations
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(ensure_schema_migrations)
 
     # 2. Seed default categories if none exist
     async with AsyncSessionLocal() as session:
@@ -51,7 +81,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title=settings.APP_NAME,
-    description="Backend API and web server for Household Rent and Expenses Tracker",
+    description="Backend API and web server for CoreNest Household Finance Tracker",
     version="1.0.0",
     lifespan=lifespan,
 )
@@ -66,6 +96,8 @@ app.add_middleware(
 )
 
 # Include API Routers
+app.include_router(auth_router)
+app.include_router(users_router)
 app.include_router(sync_router)
 app.include_router(members_router)
 app.include_router(categories_router)
