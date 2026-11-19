@@ -1,52 +1,107 @@
-# 🏠 Household Finance Tracker WebApp!
+# 🏠 CoreNest — Household Finance Tracker
 
-A modern household rent and shared expense tracking web application with a **FastAPI (Python 3.12)** backend and **PostgreSQL 16** database, fully containerized with **Docker** for deployment on Proxmox LXC, homeservers, or local environments.
+A modern household rent and shared expense tracking web application (**CoreNest**) with a **FastAPI (Python 3.12)** backend and **PostgreSQL 16** database, fully containerized with **Docker** and automatically built & published to GitHub Container Registry (`ghcr.io/gunnhil25/rent_app:latest`) via GitHub Actions.
 
 ---
 
-## 🚀 Quick Start (Docker Compose)
+## 🚀 Quick Start (Prebuilt Image via GHCR)
 
-The easiest way to run the application is with Docker Compose:
+The fastest way to deploy **CoreNest** on a server or Proxmox LXC is by pulling the prebuilt image from GitHub Container Registry:
 
 ```bash
-# 1. Clone or copy this repository to your server/LXC
-cd "Rent App"
+# 1. Clone this repository
+git clone https://github.com/gunnhil25/rent_app.git
+cd rent_app
 
-# 2. (Optional) Customize passwords or port in .env
+# 2. (Optional) Customize database passwords or port in .env
 cp .env.example .env
 
-# 3. Build and launch the containers
-docker compose up -d --build
+# 3. Pull the latest images and start the stack
+docker compose pull
+docker compose up -d
 ```
+
+> **Note for private repositories:** If the GitHub repository or GHCR package is private, authenticate Docker once with a GitHub Personal Access Token (`read:packages` scope):
+> ```bash
+> echo "<YOUR_GITHUB_PAT>" | docker login ghcr.io -u <YOUR_GITHUB_USERNAME> --password-stdin
+> ```
 
 Once running:
 * **Web Application:** `http://<YOUR_SERVER_IP>:8000/`
 * **Interactive API Docs (Swagger UI):** `http://<YOUR_SERVER_IP>:8000/docs`
 * **Database Health Check:** `http://<YOUR_SERVER_IP>:8000/api/health`
 
+### Building Locally from Source (Optional)
+If you prefer to build the image locally instead of pulling from GHCR:
+```bash
+docker compose up -d --build
+```
+
+### Updating to the Latest Release
+Whenever new changes are pushed to `main`, GitHub Actions builds, smoke-tests, and publishes an updated `:latest` image. To update your running instance:
+```bash
+docker compose pull
+docker compose up -d
+```
+
 ---
 
 ## 📦 Proxmox LXC Deployment Guide
 
-### Option A: Standard Docker inside an LXC Container
-If you are running Docker inside a Proxmox LXC container (e.g. Debian or Ubuntu template):
+### Step-by-Step Setup (Docker inside an LXC Container)
+If you are running Docker inside a Proxmox LXC container (e.g., Debian 12 or Ubuntu 24.04 template):
 
-1. **Ensure your LXC container supports Docker:**
-   - In Proxmox VE Web UI: go to **LXC Container** → **Options** → **Features**
-   - Enable **`nesting=1`** and **`keyctl=1`** (required for Docker inside LXC).
-2. **Install Docker in the LXC** (if not already installed):
+1. **Enable LXC features for Docker:**
+   - In the Proxmox VE Web UI, select your LXC container → **Options** → **Features**.
+   - Enable **`nesting=1`** and **`keyctl=1`** (required for Docker inside an unprivileged LXC), then reboot the LXC if prompted.
+
+2. **Install Docker & Docker Compose plugin inside the LXC:**
    ```bash
-   curl -fsSL https://get.docker.com -o get-docker.sh
-   sh get-docker.sh
+   apt-get update && apt-get install -y curl git
+   curl -fsSL https://get.docker.com | sh
    ```
-3. **Deploy the App:**
+   Verify installation:
    ```bash
-   git clone https://github.com/gunnhil25/rent_app /opt/rent-app
-   cd /opt/rent-app
+   docker --version
+   docker compose version
+   ```
+
+3. **Clone the repository and configure environment:**
+   ```bash
+   git clone https://github.com/gunnhil25/rent_app.git /opt/corenest
+   cd /opt/corenest
+   cp .env.example .env
+   # Optional: edit .env to set custom POSTGRES_PASSWORD or PORT
+   nano .env
+   ```
+
+4. **Pull the image and launch the stack:**
+   ```bash
+   # (Only needed if the GHCR package is private)
+   # docker login ghcr.io -u gunnhil25
+
+   docker compose pull
    docker compose up -d
    ```
-4. **Auto-start on LXC boot:**
-   Docker Compose containers with `restart: unless-stopped` will automatically start whenever your LXC boots up.
+
+5. **Verify the deployment:**
+   ```bash
+   docker compose ps
+   curl -s http://localhost:8000/api/health
+   ```
+   You should see `"status":"ok"` and `"database":"connected"`.
+
+6. **Auto-start on LXC boot:**
+   Both services use `restart: unless-stopped`, so they start automatically whenever your Proxmox LXC boots.
+
+---
+
+## ⚙️ CI/CD Pipeline (GitHub Actions)
+
+Every push or pull request to `main` triggers [`.github/workflows/docker.yml`](.github/workflows/docker.yml):
+1. Builds the Docker image from `Dockerfile` using Buildx with GitHub Actions layer caching.
+2. Starts the full `docker compose` stack (`db` + `web`) and smoke-tests `/api/health` and `/`.
+3. On pushes to `main`, pushes the verified image to `ghcr.io/gunnhil25/rent_app:latest` (along with `main` and commit SHA tags).
 
 ---
 
