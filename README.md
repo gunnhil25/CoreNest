@@ -1,6 +1,6 @@
 # 🏠 CoreNest — Household Finance Tracker
 
-A modern household rent and shared expense tracking web application (**CoreNest**) with a **FastAPI (Python 3.12)** backend and **PostgreSQL 16** database, fully containerized with **Docker** and automatically built & published to GitHub Container Registry (`ghcr.io/gunnhil25/rent_app:latest`) via GitHub Actions.
+A modern household rent and shared expense tracking web application (**CoreNest**) with a **FastAPI (Python 3.12)** backend and **PostgreSQL 16** database, fully containerized with **Docker** and automatically built & published to GitHub Container Registry (`ghcr.io/gunnhil25/corenest:latest`) via GitHub Actions.
 
 ---
 
@@ -10,8 +10,8 @@ The fastest way to deploy **CoreNest** on a server or Proxmox LXC is by pulling 
 
 ```bash
 # 1. Clone this repository
-git clone https://github.com/gunnhil25/rent_app.git
-cd rent_app
+git clone https://github.com/gunnhil25/CoreNest.git
+cd CoreNest
 
 # 2. (Optional) Customize database passwords or port in .env
 cp .env.example .env
@@ -70,7 +70,7 @@ If you are running Docker inside a Proxmox LXC container (e.g., Debian 12 or Ubu
 
 3. **Clone the repository and configure environment:**
    ```bash
-   git clone https://github.com/gunnhil25/rent_app.git /opt/corenest
+   git clone https://github.com/gunnhil25/CoreNest.git /opt/corenest
    cd /opt/corenest
    cp .env.example .env
    # Optional: edit .env to set custom POSTGRES_PASSWORD or PORT
@@ -103,7 +103,7 @@ If you are running Docker inside a Proxmox LXC container (e.g., Debian 12 or Ubu
 Every push or pull request on any branch triggers [`.github/workflows/docker.yml`](.github/workflows/docker.yml):
 1. Builds the Docker image from `Dockerfile` using Buildx with GitHub Actions layer caching.
 2. Starts the full `docker compose` stack (`db` + `web`) and runs end-to-end smoke tests covering `/api/health`, `/`, initial admin setup, authentication, and role-based access control.
-3. On branch pushes (non-PR), pushes the verified image to GHCR (`ghcr.io/gunnhil25/rent_app:<branch>` and commit SHA tags, plus `:latest` on `main`).
+3. On branch pushes (non-PR), pushes the verified image to GHCR (`ghcr.io/gunnhil25/corenest:<branch>` and commit SHA tags, plus `:latest` on `main`).
 
 ---
 

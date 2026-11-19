@@ -38,7 +38,7 @@ jobs:
           context: .
           file: ./Dockerfile
           load: true
-          tags: ghcr.io/gunnhil25/rent_app:latest
+          tags: ghcr.io/gunnhil25/corenest:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
