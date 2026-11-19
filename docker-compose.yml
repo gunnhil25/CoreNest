@@ -20,6 +20,7 @@ services:
       - rentapp_net
 
   web:
+    image: ghcr.io/gunnhil25/rent_app:latest
     build:
       context: .
       dockerfile: Dockerfile
