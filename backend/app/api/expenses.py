@@ -3,8 +3,9 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from backend.app.auth_deps import get_current_user
 from backend.app.database import get_db
-from backend.app.models import ExpenseModel
+from backend.app.models import ExpenseModel, UserModel
 from backend.app.schemas import ExpenseCreate, ExpenseResponse
 
 router = APIRouter(prefix="/api/expenses", tags=["Expenses"])
@@ -15,7 +16,8 @@ async def list_expenses(
     category: Optional[str] = Query(None, description="Filter by category"),
     payer: Optional[str] = Query(None, description="Filter by payer"),
     sort: Optional[str] = Query("date-desc", description="Sort order"),
-    db: AsyncSession = Depends(get_db)
+    current_user: UserModel = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
     query = select(ExpenseModel)
     if category and category != "all":
@@ -41,8 +43,15 @@ async def list_expenses(
 
 
 @router.post("", response_model=ExpenseResponse, status_code=status.HTTP_201_CREATED)
-async def create_expense(payload: ExpenseCreate, db: AsyncSession = Depends(get_db)):
+async def create_expense(
+    payload: ExpenseCreate,
+    current_user: UserModel = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
     exp_id = payload.id if payload.id else int(time.time() * 1000)
+    while (await db.execute(select(ExpenseModel.id).where(ExpenseModel.id == exp_id))).scalar_one_or_none() is not None:
+        exp_id += 1
+
     desc = payload.desc.strip() if payload.desc else payload.category
 
     expense = ExpenseModel(
@@ -51,7 +60,9 @@ async def create_expense(payload: ExpenseCreate, db: AsyncSession = Depends(get_
         amount=payload.amount,
         payer=payload.payer,
         category=payload.category,
-        date=payload.date
+        date=payload.date,
+        created_by_user_id=current_user.id,
+        created_by_name=current_user.display_name,
     )
     db.add(expense)
     await db.commit()
@@ -60,11 +71,22 @@ async def create_expense(payload: ExpenseCreate, db: AsyncSession = Depends(get_
 
 
 @router.put("/{id}", response_model=ExpenseResponse)
-async def update_expense(id: int, payload: ExpenseCreate, db: AsyncSession = Depends(get_db)):
+async def update_expense(
+    id: int,
+    payload: ExpenseCreate,
+    current_user: UserModel = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
     res = await db.execute(select(ExpenseModel).where(ExpenseModel.id == id))
     expense = res.scalar_one_or_none()
     if not expense:
         raise HTTPException(status_code=404, detail="Expense transaction not found")
+
+    if current_user.role != "admin" and expense.created_by_user_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only edit transactions that you recorded",
+        )
 
     expense.desc = payload.desc.strip() if payload.desc else payload.category
     expense.amount = payload.amount
@@ -78,11 +100,21 @@ async def update_expense(id: int, payload: ExpenseCreate, db: AsyncSession = Dep
 
 
 @router.delete("/{id}", status_code=status.HTTP_200_OK)
-async def delete_expense(id: int, db: AsyncSession = Depends(get_db)):
+async def delete_expense(
+    id: int,
+    current_user: UserModel = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
     res = await db.execute(select(ExpenseModel).where(ExpenseModel.id == id))
     expense = res.scalar_one_or_none()
     if not expense:
         raise HTTPException(status_code=404, detail="Expense transaction not found")
+
+    if current_user.role != "admin" and expense.created_by_user_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only delete transactions that you recorded",
+        )
 
     await db.delete(expense)
     await db.commit()

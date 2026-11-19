@@ -1,16 +1,20 @@
 import time
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, delete
+from sqlalchemy import select
+from backend.app.auth_deps import get_current_user, require_admin
 from backend.app.database import get_db
-from backend.app.models import MemberModel, CategoryModel, ExpenseModel
+from backend.app.models import MemberModel, CategoryModel, ExpenseModel, UserModel
 from backend.app.schemas import AppDataSync, CategoryBase, ExpenseBase
 
 router = APIRouter(prefix="/api/data", tags=["Sync"])
 
 
 @router.get("", response_model=AppDataSync)
-async def get_all_data(db: AsyncSession = Depends(get_db)):
+async def get_all_data(
+    current_user: UserModel = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
     """Fetch complete household state: members, categories, and expenses."""
     # 1. Fetch members ordered by sort_order
     members_res = await db.execute(select(MemberModel).order_by(MemberModel.sort_order.asc(), MemberModel.id.asc()))
@@ -37,7 +41,9 @@ async def get_all_data(db: AsyncSession = Depends(get_db)):
             amount=e.amount,
             payer=e.payer,
             category=e.category,
-            date=e.date
+            date=e.date,
+            created_by_user_id=e.created_by_user_id,
+            created_by_name=e.created_by_name,
         )
         for e in expenses_res.scalars().all()
     ]
@@ -50,8 +56,12 @@ async def get_all_data(db: AsyncSession = Depends(get_db)):
 
 
 @router.post("")
-async def sync_all_data(payload: AppDataSync, db: AsyncSession = Depends(get_db)):
-    """Sync and persist the complete household state atomically in PostgreSQL."""
+async def sync_all_data(
+    payload: AppDataSync,
+    current_user: UserModel = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Sync and persist the complete household state atomically in PostgreSQL (admin only)."""
     try:
         # --- 1. Sync Members ---
         existing_members_res = await db.execute(select(MemberModel))
@@ -101,14 +111,17 @@ async def sync_all_data(payload: AppDataSync, db: AsyncSession = Depends(get_db)
                 db.add(new_cat)
 
         # --- 3. Sync Expenses ---
-        # Clear and replace or upsert expenses
+        valid_user_ids = set((await db.execute(select(UserModel.id))).scalars().all())
         existing_expenses_res = await db.execute(select(ExpenseModel))
         existing_expenses = {e.id: e for e in existing_expenses_res.scalars().all()}
         incoming_expense_ids = set()
 
         for exp in payload.expenses:
             exp_id = exp.id if exp.id else int(time.time() * 1000)
+            while exp_id in incoming_expense_ids:
+                exp_id += 1
             incoming_expense_ids.add(exp_id)
+            safe_user_id = exp.created_by_user_id if exp.created_by_user_id in valid_user_ids else None
             if exp_id in existing_expenses:
                 model = existing_expenses[exp_id]
                 model.desc = exp.desc
@@ -116,6 +129,10 @@ async def sync_all_data(payload: AppDataSync, db: AsyncSession = Depends(get_db)
                 model.payer = exp.payer
                 model.category = exp.category
                 model.date = exp.date
+                if exp.created_by_user_id is not None:
+                    model.created_by_user_id = safe_user_id
+                if exp.created_by_name is not None:
+                    model.created_by_name = exp.created_by_name
             else:
                 new_exp = ExpenseModel(
                     id=exp_id,
@@ -123,7 +140,9 @@ async def sync_all_data(payload: AppDataSync, db: AsyncSession = Depends(get_db)
                     amount=exp.amount,
                     payer=exp.payer,
                     category=exp.category,
-                    date=exp.date
+                    date=exp.date,
+                    created_by_user_id=safe_user_id,
+                    created_by_name=exp.created_by_name,
                 )
                 db.add(new_exp)
 
